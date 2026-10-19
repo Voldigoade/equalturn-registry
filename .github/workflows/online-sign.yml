@@ -1,0 +1,55 @@
+name: TUF-on-CI online signing
+
+permissions: {}
+
+on:
+  schedule:
+    - cron: '17 1,7,13,19 * * *'
+  push:
+    branches: [main]
+    paths: ['metadata/**', '!metadata/timestamp.json', '!metadata/snapshot.json']
+  workflow_dispatch:
+
+jobs:
+  online-sign:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # for OIDC identity access
+      contents: write # for committing snapshot/timestamp changes (not needed if using GitHub App)
+      actions: write # for dispatching publish workflow (not needed if using GitHub App)
+    steps:
+      - name: Create GitHub App token
+        id: app-token
+        if: vars.TUF_ON_CI_APP_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.TUF_ON_CI_APP_ID }}
+          private-key: ${{ secrets.TUF_ON_CI_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-actions: write
+
+      - id: online-sign
+        uses: theupdateframework/tuf-on-ci/actions/online-sign@662382a8295b89a9d538390ce8b9bb85b207a93d # v0.21.0
+        with:
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          gcp_workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp_service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          aws_region: ${{ vars.AWS_REGION }}
+          aws_role_to_assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+  update-issue:
+    runs-on: ubuntu-latest
+    needs: [online-sign]
+    if: always() && !cancelled()
+    permissions:
+      issues: write # for modifying Issues
+      contents: read # for checking out the repository
+    steps:
+      - name: Update the issue for the workflow
+        uses: theupdateframework/tuf-on-ci/actions/update-issue@662382a8295b89a9d538390ce8b9bb85b207a93d # v0.21.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          success: ${{ !contains(needs.*.result, 'failure') }}
